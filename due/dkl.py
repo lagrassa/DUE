@@ -1,6 +1,8 @@
 import torch
 
 import gpytorch
+import numpy as np
+from sklearn.preprocessing import StandardScaler
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.kernels import RBFKernel, RQKernel, MaternKernel, ScaleKernel
 from gpytorch.means import ConstantMean
@@ -11,43 +13,87 @@ from gpytorch.variational import (
     IndependentMultitaskVariationalStrategy,
     VariationalStrategy,
 )
+from moonshine.gpytorch_tools import custom_index_batch, mutate_dict_to_cpu
 
 from sklearn import cluster
 
 
 def initial_values(train_dataset, feature_extractor, n_inducing_points):
     steps = 10
-    idx = torch.randperm(len(train_dataset))[:1000].chunk(steps)
+    check_enough_high_error = False
+    if isinstance(train_dataset, dict):
+        idx = torch.randperm(len(train_dataset["traj_idx"]))[:1000].chunk(steps)
+        check_enough_high_error = True
+    else:
+        idx = torch.randperm(len(train_dataset))[:1000].chunk(steps)
     f_X_samples = []
+    y_samples = []
+    # a bit of a hack: ensure at least 5 "high error" samples
+    min_error_samples = 7
+    high_error = 0.1
+    if check_enough_high_error:
+        high_error_total = (train_dataset["error"][:,1] > high_error).sum()
+        print("High error total", high_error_total)
+        for attempt_idx in range(10):
+            ys_check = []
+            with torch.no_grad():
+                for i in range(steps):
+                    X_sample = custom_index_batch(train_dataset, idxs = idx[i])
+                    ys_check.append(X_sample["error"][:,1].numpy())
+                ys_check = np.vstack(ys_check)
+                num_high_error =  (ys_check.flatten() > high_error).sum()
+                print("num high error",num_high_error)
+                if num_high_error < min_error_samples:
+                    idx = torch.randperm(len(train_dataset["traj_idx"]))[:1000].chunk(steps)
+                else:
+                    break
+
 
     with torch.no_grad():
         for i in range(steps):
-            X_sample = torch.stack([train_dataset[j][0] for j in idx[i]])
+            if isinstance(train_dataset, dict):
+                X_sample = custom_index_batch(train_dataset, idxs = idx[i])
+                #mutate_dict_to_cpu(X_sample)
+            else:
+                X_sample = torch.stack([train_dataset[j][0] for j in idx[i]])
 
             if torch.cuda.is_available():
-                X_sample = X_sample.cuda()
+                #X_sample = X_sample.cuda()
                 feature_extractor = feature_extractor.cuda()
 
             f_X_samples.append(feature_extractor(X_sample).cpu())
+            y_samples.append(X_sample["error"][:,1].cpu())
 
     f_X_samples = torch.cat(f_X_samples)
+    y_samples = torch.cat(y_samples)
 
     initial_inducing_points = _get_initial_inducing_points(
-        f_X_samples.numpy(), n_inducing_points
+        f_X_samples.numpy(), n_inducing_points, y_samples.numpy()
     )
     initial_lengthscale = _get_initial_lengthscale(f_X_samples)
 
     return initial_inducing_points, initial_lengthscale
 
 
-def _get_initial_inducing_points(f_X_sample, n_inducing_points):
+def _get_initial_inducing_points(f_X_sample, n_inducing_points, y_sample):
     kmeans = cluster.MiniBatchKMeans(
         n_clusters=n_inducing_points, batch_size=n_inducing_points * 10
-    )
+        )
+    scaler = StandardScaler()
+    scaler.fit(y_sample.reshape(-1,1))
+    y_sample_scaled  = scaler.transform(y_sample.reshape(-1,1))
+    f_X_sample = np.hstack([f_X_sample, y_sample_scaled.reshape(-1,1)])
     kmeans.fit(f_X_sample)
+    ys = []
     initial_inducing_points = torch.from_numpy(kmeans.cluster_centers_)
+    for pt in initial_inducing_points:
+        index_of_point = np.abs(f_X_sample -  pt.numpy()).sum(axis=1).argmin()
+        ys.append(y_sample[index_of_point])
 
-    return initial_inducing_points
+    #get errors of each inducing point
+    #assert (np.array(ys) > 0.1).sum() > 5
+
+    return initial_inducing_points[:,:-1]
 
 
 def _get_initial_lengthscale(f_X_samples):
@@ -136,5 +182,6 @@ class DKL(gpytorch.Module):
         self.gp = gp
 
     def forward(self, x):
+        #mutate_dict_to_cpu(x)
         features = self.feature_extractor(x)
         return self.gp(features)

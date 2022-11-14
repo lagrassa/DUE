@@ -11,6 +11,7 @@ from torch.nn.utils.spectral_norm import (
     SpectralNormStateDictHook,
 )
 from torch import nn
+import matplotlib.pyplot as plt
 
 
 class SpectralNormFC(SpectralNorm):
@@ -19,7 +20,8 @@ class SpectralNormFC(SpectralNorm):
         u = getattr(module, self.name + "_u")
         v = getattr(module, self.name + "_v")
         weight_mat = self.reshape_weight_to_matrix(weight)
-
+        us = []
+        vs = []
         if do_power_iteration:
             with torch.no_grad():
                 for _ in range(self.n_power_iterations):
@@ -30,11 +32,16 @@ class SpectralNormFC(SpectralNorm):
                         torch.mv(weight_mat.t(), u), dim=0, eps=self.eps, out=v
                     )
                     u = normalize(torch.mv(weight_mat, v), dim=0, eps=self.eps, out=u)
+                    #us.append(u.abs().mean().detach().cpu())
+                    #vs.append(v.abs().mean().detach().cpu())
                 if self.n_power_iterations > 0:
                     # See above on why we need to clone
                     u = u.clone(memory_format=torch.contiguous_format)
                     v = v.clone(memory_format=torch.contiguous_format)
-
+        #plt.plot(us, label="u")
+        #plt.plot(vs, label="v")
+        #plt.legend()
+        #plt.show()
         sigma = torch.dot(u, torch.mv(weight_mat, v))
         # soft normalization: only when sigma larger than coeff
         factor = torch.max(torch.ones(1).to(weight.device), sigma / self.coeff)

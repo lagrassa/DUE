@@ -7,7 +7,7 @@ from due.layers import spectral_norm_fc
 class FCResNet(nn.Module):
     def __init__(
         self,
-        input_dim,
+        preprocess,
         features,
         depth,
         spectral_normalization,
@@ -23,7 +23,8 @@ class FCResNet(nn.Module):
 
         Introduced in SNGP: https://arxiv.org/abs/2006.10108
         """
-        self.first = nn.Linear(input_dim, features)
+        self.preprocess = preprocess
+        self.first =  nn.Linear(features, features)
         self.residuals = nn.ModuleList(
             [nn.Linear(features, features) for i in range(depth)]
         )
@@ -52,8 +53,30 @@ class FCResNet(nn.Module):
         else:
             raise ValueError("That acivation is unknown")
 
+    def apply(self, fn):
+        for name, module in self.named_children():
+            if name == "preprocess":
+                continue
+            module.apply(fn)
+        return super().apply(fn)
+
+    def _apply(self, fn):
+        for name, module in self.named_children():
+            if name == "preprocess":
+                continue
+            module._apply(fn)
+        return self
+
+    def _recurse_update_dict(self, submodule, destination, info):
+        return 
+
+    def _recurse_update_dict(submodule, destination, info):
+        return
+
+
     def forward(self, x):
-        x = self.first(x)
+        x = self.preprocess(x)
+        x = self.first(x.cuda())
 
         for residual in self.residuals:
             x = x + self.dropout(self.activation(residual(x)))
