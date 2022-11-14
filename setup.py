@@ -14,6 +14,6 @@ setup(
     author="Joost van Amersfoort",
     url="https://github.com/y0ast/DUE",
     author_email="joost.van.amersfoort@cs.ox.ac.uk",
-    install_requires=["gpytorch>=1.2.1", "torch", "scikit-learn"],
+    install_requires=[], #["gpytorch>=1.2.1", "torch", "scikit-learn"],
     python_requires=">=3.6",
 )
