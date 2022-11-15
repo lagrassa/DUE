@@ -8,10 +8,11 @@ class FCResNet(nn.Module):
     def __init__(
         self,
         preprocess,
-        features,
+        input_dim,
         depth,
         spectral_normalization,
         coeff=0.95,
+        hidden_features = 128,
         n_power_iterations=1,
         dropout_rate=0.01,
         num_outputs=None,
@@ -24,9 +25,9 @@ class FCResNet(nn.Module):
         Introduced in SNGP: https://arxiv.org/abs/2006.10108
         """
         self.preprocess = preprocess
-        self.first =  nn.Linear(features, features)
+        self.first =  nn.Linear(input_dim, hidden_features)
         self.residuals = nn.ModuleList(
-            [nn.Linear(features, features) for i in range(depth)]
+            [nn.Linear(hidden_features, hidden_features) for i in range(depth)]
         )
         self.dropout = nn.Dropout(dropout_rate)
 
@@ -44,7 +45,7 @@ class FCResNet(nn.Module):
 
         self.num_outputs = num_outputs
         if num_outputs is not None:
-            self.last = nn.Linear(features, num_outputs)
+            self.last = nn.Linear(hidden_features, num_outputs)
 
         if activation == "relu":
             self.activation = F.relu

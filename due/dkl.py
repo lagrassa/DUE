@@ -6,7 +6,8 @@ from sklearn.preprocessing import StandardScaler
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.kernels import RBFKernel, RQKernel, MaternKernel, ScaleKernel
 from gpytorch.means import ConstantMean
-from gpytorch.models import ApproximateGP
+from gpytorch.models import ApproximateGP, ExactGP
+from gpytorch.models import GP as GPytorchGP
 
 from gpytorch.variational import (
     CholeskyVariationalDistribution,
@@ -54,6 +55,7 @@ def initial_values(train_dataset, feature_extractor, n_inducing_points):
             if isinstance(train_dataset, dict):
                 X_sample = custom_index_batch(train_dataset, idxs = idx[i])
                 #mutate_dict_to_cpu(X_sample)
+                y_samples.append(X_sample["error"][:,1].cpu())
             else:
                 X_sample = torch.stack([train_dataset[j][0] for j in idx[i]])
 
@@ -62,10 +64,12 @@ def initial_values(train_dataset, feature_extractor, n_inducing_points):
                 feature_extractor = feature_extractor.cuda()
 
             f_X_samples.append(feature_extractor(X_sample).cpu())
-            y_samples.append(X_sample["error"][:,1].cpu())
 
     f_X_samples = torch.cat(f_X_samples)
-    y_samples = torch.cat(y_samples)
+    if len(y_samples):
+        y_samples = torch.cat(y_samples)
+    else:
+        y_samples = torch.Tensor([])
 
     initial_inducing_points = _get_initial_inducing_points(
         f_X_samples.numpy(), n_inducing_points, y_samples.numpy()
@@ -79,21 +83,25 @@ def _get_initial_inducing_points(f_X_sample, n_inducing_points, y_sample):
     kmeans = cluster.MiniBatchKMeans(
         n_clusters=n_inducing_points, batch_size=n_inducing_points * 10
         )
-    scaler = StandardScaler()
-    scaler.fit(y_sample.reshape(-1,1))
-    y_sample_scaled  = scaler.transform(y_sample.reshape(-1,1))
-    f_X_sample = np.hstack([f_X_sample, y_sample_scaled.reshape(-1,1)])
+    if len(y_sample):
+        scaler = StandardScaler()
+        scaler.fit(y_sample.reshape(-1,1))
+        y_sample_scaled  = scaler.transform(y_sample.reshape(-1,1))
+        f_X_sample = np.hstack([f_X_sample, y_sample_scaled.reshape(-1,1)])
     kmeans.fit(f_X_sample)
     ys = []
     initial_inducing_points = torch.from_numpy(kmeans.cluster_centers_)
     for pt in initial_inducing_points:
         index_of_point = np.abs(f_X_sample -  pt.numpy()).sum(axis=1).argmin()
-        ys.append(y_sample[index_of_point])
+        if len(y_sample):
+            ys.append(y_sample[index_of_point])
 
     #get errors of each inducing point
     #assert (np.array(ys) > 0.1).sum() > 5
-
-    return initial_inducing_points[:,:-1]
+    if len(y_sample):
+        return initial_inducing_points[:,:-1]
+    else:
+        return initial_inducing_points
 
 
 def _get_initial_lengthscale(f_X_samples):
@@ -169,6 +177,63 @@ class GP(ApproximateGP):
             if "inducing_points" in name:
                 return param
 
+class ExactGPDKL(ExactGP):
+    def __init__(
+        self,
+        num_outputs,
+        initial_lengthscale,
+        train_inputs,
+        train_targets,
+        likelihood,
+        kernel="RBF",
+    ):
+        self.train_inputs = train_inputs #torch.zeros().float()
+        self.train_targets = train_targets
+        #super(ExactGP, self).__init__()
+        super().__init__(train_inputs, train_targets, likelihood)
+        if num_outputs > 1:
+            batch_shape = torch.Size([num_outputs])
+        else:
+            batch_shape = torch.Size([])
+
+        kwargs = {
+            "batch_shape": batch_shape,
+        }
+
+        if kernel == "RBF":
+            kernel = RBFKernel(**kwargs)
+        elif kernel == "Matern12":
+            kernel = MaternKernel(nu=1 / 2, **kwargs)
+        elif kernel == "Matern32":
+            kernel = MaternKernel(nu=3 / 2, **kwargs)
+        elif kernel == "Matern52":
+            kernel = MaternKernel(nu=5 / 2, **kwargs)
+        elif kernel == "RQ":
+            kernel = RQKernel(**kwargs)
+        else:
+            raise ValueError("Specified kernel not known.")
+
+        kernel.lengthscale = initial_lengthscale * torch.ones_like(kernel.lengthscale)
+
+        self.mean_module = ConstantMean(batch_shape=batch_shape)
+        self.covar_module = ScaleKernel(kernel, batch_shape=batch_shape)
+
+    def forward(self, x):
+        mean = self.mean_module(x)
+        covar = self.covar_module(x)
+        return MultivariateNormal(mean, covar)
+
+    def __call__(self, inputs, prior=False, **kwargs):
+        return super().__call__(inputs, **kwargs)
+
+        #return self.prediction_strategy(inputs, prior=prior, **kwargs)
+
+    @property
+    def inducing_points(self):
+        for name, param in self.named_parameters():
+            if "inducing_points" in name:
+                return param
+
 
 class DKL(gpytorch.Module):
     def __init__(self, feature_extractor, gp):
@@ -185,3 +250,5 @@ class DKL(gpytorch.Module):
         #mutate_dict_to_cpu(x)
         features = self.feature_extractor(x)
         return self.gp(features)
+
+
