@@ -2,6 +2,7 @@ import torch
 
 import gpytorch
 import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.kernels import RBFKernel, RQKernel, MaternKernel, ScaleKernel
@@ -168,7 +169,6 @@ class GP(ApproximateGP):
     def forward(self, x):
         mean = self.mean_module(x)
         covar = self.covar_module(x)
-
         return MultivariateNormal(mean, covar)
 
     @property
@@ -189,6 +189,8 @@ class ExactGPDKL(ExactGP):
     ):
         self.train_inputs = train_inputs #torch.zeros().float()
         self.train_targets = train_targets
+        #self.axes = plt.axes()
+        self.made_colorbar = False
         #super(ExactGP, self).__init__()
         super().__init__(train_inputs, train_targets, likelihood)
         if num_outputs > 1:
@@ -221,6 +223,17 @@ class ExactGPDKL(ExactGP):
     def forward(self, x):
         mean = self.mean_module(x)
         covar = self.covar_module(x)
+        covar_matrix = covar.evaluate().detach().cpu().numpy()
+        #if self.current_epoch > 30 and covar_matrix.shape == (70,70):
+        #    matshow = self.axes.matshow(covar_matrix, vmax=1.1, vmin=0)
+        #    #self.axes.colorbar(cmap="Greys")
+        #    if not self.made_colorbar:
+        #        plt.colorbar(matshow)
+        #        self.made_colorbar=True
+        #    plt.pause(0.01)
+        #    #import ipdb; ipdb.set_trace()
+        #plt.show()
+
         return MultivariateNormal(mean, covar)
 
     def __call__(self, inputs, prior=False, **kwargs):
